@@ -177,15 +177,26 @@ def extract_taught_concepts(texts, chunks):
     return all_concepts, dict(buckets)
 
 def gap_and_no_repeat(taught_concepts, past_concepts, past_patterns=None, past_texts=None):
-    # STRICT MODE: NEVER repeat same questions, ALWAYS new on what was NOT assessed
-    # NEW RULE: No general concepts - use least assessed concepts with brand new questions
-    past_set = set([c.lower() for c in past_concepts])
+    # FIX: Handle empty taught_concepts to avoid ZeroDivisionError
+    if not taught_concepts:
+        # Default fallback concepts if no taught content uploaded yet
+        taught_concepts = [
+            "Backwards compatibility", "PAN", "Network Operating System", "E-Waste", 
+            "Ergonomics", "Green computing", "UTP and Fibre", "Nodes", "WAN", "WLAN",
+            "IP address", "ISP", "URL", "Domain name", "Broadband", "Convergence",
+            "Touch screen", "Magnetic storage", "Electronic storage", "Optical storage"
+        ]
+    
+    past_set = set([c.lower() for c in (past_concepts or [])])
     past_questions_text = " ".join(past_texts).lower() if past_texts else ""
     
     # Count frequency of each taught concept in past papers
     freq_map = {}
     for c in taught_concepts:
-        freq_map[c] = past_questions_text.count(c.lower())
+        try:
+            freq_map[c] = past_questions_text.count(c.lower())
+        except:
+            freq_map[c] = 0
     
     # Sort taught concepts by frequency ascending (least assessed first)
     taught_sorted_by_least = sorted(taught_concepts, key=lambda x: freq_map.get(x, 0))
@@ -194,33 +205,38 @@ def gap_and_no_repeat(taught_concepts, past_concepts, past_patterns=None, past_t
     gaps = [c for c in taught_sorted_by_least if freq_map.get(c, 0) == 0]
     gaps = list(dict.fromkeys(gaps))  # dedupe
     
-    # Least assessed = assessed 1-2 times - will be reused with BRAND NEW questions
+    # Least assessed = assessed 1-2 times
     least_assessed = [c for c in taught_sorted_by_least if 1 <= freq_map.get(c, 0) <= 2 and c.lower() not in [g.lower() for g in gaps]]
     
-    # Medium assessed = 3+ times - use only if needed, but still with new phrasing
+    # Medium assessed = 3+ times
     medium_assessed = [c for c in taught_sorted_by_least if freq_map.get(c, 0) >= 3]
     
-    # STRICT ORDER: Gaps (0 times) -> Least (1-2 times) -> Medium (3+ times) -> all with new questions
-    # No shuffling gaps to keep least assessed order, but shuffle within tiers for variety
+    # STRICT ORDER: Gaps (0 times) -> Least (1-2 times) -> Medium (3+ times)
     ordered = gaps + least_assessed + medium_assessed
     
-    # Ensure at least 50 concepts for 120 marks by cycling least assessed with new angles
-    # Instead of general concepts, we cycle through least assessed again with new phrasing
+    # Ensure at least 50 concepts - FIXED: Avoid ZeroDivisionError when cycle_pool empty
     if len(ordered) < 50:
-        # Cycle through least assessed + gaps again
         cycle_pool = gaps + least_assessed
         if not cycle_pool:
             cycle_pool = taught_sorted_by_least
-        idx = 0
-        while len(ordered) < 60:  # Build large pool
-            base = cycle_pool[idx % len(cycle_pool)]
-            # We will not add duplicate exact, but we will allow same base concept to be reused with new question phrasing later via get_next_concept logic
-            # So just ensure ordered has enough unique base concepts
-            if base not in ordered:
-                ordered.append(base)
-            idx += 1
-            if idx > 200:
-                break
+        if not cycle_pool:
+            cycle_pool = taught_concepts  # Final fallback
+        
+        # Guard against empty cycle_pool
+        if cycle_pool and len(cycle_pool) > 0:
+            idx = 0
+            while len(ordered) < 60 and idx < 200:
+                base = cycle_pool[idx % len(cycle_pool)]
+                if base not in ordered:
+                    ordered.append(base)
+                idx += 1
+        else:
+            # If still empty, just use taught_concepts
+            ordered = taught_concepts[:60]
+    
+    # Final safety: ensure ordered not empty
+    if not ordered:
+        ordered = taught_concepts[:60] if taught_concepts else ["Backwards compatibility"]
     
     return gaps, ordered, freq_map
 
