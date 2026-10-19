@@ -177,51 +177,57 @@ def extract_taught_concepts(texts, chunks):
     return all_concepts, dict(buckets)
 
 def gap_and_no_repeat(taught_concepts, past_concepts, past_patterns=None, past_texts=None):
-    # STRICT MODE: ALWAYS create new questions on what was NOT assessed before
-    # NEVER repeat same questions from previous papers
+    # STRICT MODE: NEVER repeat same questions, ALWAYS new on what was NOT assessed
+    # NEW RULE: No general concepts - use least assessed concepts with brand new questions
     past_set = set([c.lower() for c in past_concepts])
     past_questions_text = " ".join(past_texts).lower() if past_texts else ""
     
-    # Concepts taught but NEVER assessed = PRIMARY - 100% priority
-    gaps = []
+    # Count frequency of each taught concept in past papers
+    freq_map = {}
     for c in taught_concepts:
-        lc = c.lower()
-        # If concept never appeared in past concepts AND not in past questions text
-        if lc not in past_set and lc not in past_questions_text:
-            gaps.append(c)
-        elif lc not in past_set:
-            # Even if appears in text but not as assessed concept, still gap
-            gaps.append(c)
+        freq_map[c] = past_questions_text.count(c.lower())
     
-    # Remove duplicates in gaps
-    gaps = list(dict.fromkeys(gaps))
+    # Sort taught concepts by frequency ascending (least assessed first)
+    taught_sorted_by_least = sorted(taught_concepts, key=lambda x: freq_map.get(x, 0))
     
-    # Remaining: concepts that were assessed but we will use ONLY if gaps exhausted
-    # And even then, we will create NEW question phrasing
-    remaining = []
-    for c in taught_concepts:
-        if c.lower() in past_set and c.lower() not in [g.lower() for g in gaps]:
-            # Check how many times it was assessed - prioritize least assessed
-            count = past_questions_text.count(c.lower())
-            if count <= 1:  # Only if assessed once or less
-                remaining.append(c)
+    # GAPS = never assessed (freq 0) - 100% priority
+    gaps = [c for c in taught_sorted_by_least if freq_map.get(c, 0) == 0]
+    gaps = list(dict.fromkeys(gaps))  # dedupe
     
-    # STRICT ORDER: GAPS FIRST - ALWAYS - 100% until gaps exhausted
-    # Then least-assessed remaining
-    random.shuffle(gaps)
-    random.shuffle(remaining)
-    ordered = gaps + remaining
+    # Least assessed = assessed 1-2 times - will be reused with BRAND NEW questions
+    least_assessed = [c for c in taught_sorted_by_least if 1 <= freq_map.get(c, 0) <= 2 and c.lower() not in [g.lower() for g in gaps]]
     
-    # If still not enough concepts (need ~40 concepts for 120 marks), add from taught with variation
-    if len(ordered) < 40:
-        for c in taught_concepts:
-            if c not in ordered:
-                ordered.append(c)
+    # Medium assessed = 3+ times - use only if needed, but still with new phrasing
+    medium_assessed = [c for c in taught_sorted_by_least if freq_map.get(c, 0) >= 3]
     
-    return gaps, ordered
+    # STRICT ORDER: Gaps (0 times) -> Least (1-2 times) -> Medium (3+ times) -> all with new questions
+    # No shuffling gaps to keep least assessed order, but shuffle within tiers for variety
+    ordered = gaps + least_assessed + medium_assessed
+    
+    # Ensure at least 50 concepts for 120 marks by cycling least assessed with new angles
+    # Instead of general concepts, we cycle through least assessed again with new phrasing
+    if len(ordered) < 50:
+        # Cycle through least assessed + gaps again
+        cycle_pool = gaps + least_assessed
+        if not cycle_pool:
+            cycle_pool = taught_sorted_by_least
+        idx = 0
+        while len(ordered) < 60:  # Build large pool
+            base = cycle_pool[idx % len(cycle_pool)]
+            # We will not add duplicate exact, but we will allow same base concept to be reused with new question phrasing later via get_next_concept logic
+            # So just ensure ordered has enough unique base concepts
+            if base not in ordered:
+                ordered.append(base)
+            idx += 1
+            if idx > 200:
+                break
+    
+    return gaps, ordered, freq_map
 
-# ---------- 3. SA CURRENT NEWS SCENARIOS - NEVER REPEAT ----------
+# ---------- 3. SA CURRENT NEWS + PARKTOWN GIRLS TRENDING - NEVER REPEAT ----------
+# Mix of SA news + high school girls trending: nail polish, new apps, fashion, beauty, social
 SA_NEWS_POOL_2025_2026 = [
+    # SA NEWS - Original
     "GreenMap AI Lab - Drones mapping illegal dumping in Gauteng using AI, solar powered lab, 15k photos, water crisis data",
     "Township SME Solar Shop - Spaza shop in Soweto installing solar during load-shedding, using POS system, mobile payments, stock tracking",
     "Matric Results Portal - Department of Education portal for 2025 Matric results, 900k learners checking results, high traffic, data privacy concerns",
@@ -231,28 +237,46 @@ SA_NEWS_POOL_2025_2026 = [
     "Johannesburg Road Repair Tracker - Pothole reporting app using citizen photos, AI classification, municipal dashboard, e-waste from old devices",
     "KZN Flood Early Warning - Drone + SMS early warning for floods, community WhatsApp groups, offline data collection, green computing with old phones",
     "Limpopo AgriTech - Small farmers using smartphone sensors for soil moisture, market price app, UTP vs satellite connectivity",
-    "Tshwane e-Waste Drive - Schools collecting e-waste, refurbishing PCs for township schools, tracking with QR codes, ergonomic refurbishment stations"
+    "Tshwane e-Waste Drive - Schools collecting e-waste, refurbishing PCs for township schools, tracking with QR codes, ergonomic refurbishment stations",
+    # PARKTOWN GIRLS TRENDING - Nail polish, new apps, fashion, beauty
+    "GlowNail Studio App - Parktown girls booking GelX nail art, 500 learners, TikTok nail trends, POS, Instagram booking, 15k nail design photos stored, fibre vs WiFi",
+    "Shein Haul Tracker - Matric dance dress and fashion haul tracking app, 800 girls sharing outfits, data overload, cloud storage for 20k photos, e-waste from old phones",
+    "Thrift2Fashion Marketplace - Y2K thrift fashion resale app by Parktown learners, second-hand uniforms to trendy outfits, UTP network in lab, database of sizes and prices",
+    "Makeup & Skincare Routine App - Skincare tracker for teen skin, 600 users logging routines, AI suggests products, data privacy, green computing recycling old makeup containers",
+    "Parktown Beauty Bar POS - School entrepreneurial day beauty stall, nail polish and lashes, mobile payments, barcode scanning, stock database, load-shedding backup with inverter",
+    "TikTok Trends Dashboard - Parktown girls tracking trending sounds and dances, 2k videos uploaded, information overload, IP addresses for each phone, fibre vs broadband",
+    "Matric Dance Dress Rental - Dress rental app for matric dance, 300 dresses, QR codes, online bookings, database management, network nodes in school lab",
+    "Braids & Beauty Booking - Braids, cornrows and wig booking app, 400 clients, WhatsApp vs app bookings, UTP cables in salon, data management of appointments",
+    "Latest iPhone vs Android Poll - Parktown IT class poll on iPhone 16 vs Samsung trends, 250 responses, spreadsheet analysis, convergence - phone is camera + wallet + social",
+    "Nail Art Design AI - AI generates nail art designs, 10k designs, ethical issue - is AI art same as human art? E-waste from old tablets, ergonomic chairs for long designing",
+    "Parktown Fashion Week Live Stream - Live streaming fashion show, 5 cameras, high bandwidth, network OS for streaming server, data vs information - raw footage vs edited highlights",
+    "CapCut & Beauty Filters App - Video editing with beauty filters, 1k learners editing, plugin vs extension, W3C standards, green computing - old phones donated for editing"
 ]
 
 def generate_sa_scenario_llm(client, model, used_scenarios, concepts_for_section):
-    # Used scenarios to avoid repeat
     used_str = ", ".join(used_scenarios) if used_scenarios else "None yet"
     concepts_str = ", ".join(concepts_for_section[:5])
 
-    prompt = f"""You are a South African current affairs scenario generator for Grade 10-12 IT exams.
+    prompt = f"""You are a scenario generator for Parktown High School for Girls Grade 10 IT exams - SA news + high school girls trending topics.
 
-Already used scenarios (NEVER repeat these, create brand new one): {used_str}
+Already used scenarios (NEVER repeat): {used_str}
+Concepts to assess: {concepts_str}
 
-Concepts to be assessed in this section: {concepts_str}
+Task: Generate ONE brand new scenario that Parktown girls will LOVE - mix SA news + trending teen topics:
 
-Task: Generate ONE brand new scenario based on SA current news 2025-2026. Must be:
-- 100% South African: Use real SA context: load-shedding, water crisis, township economy, matric, SASSA, Springboks, potholes, e-waste, solar, 4IR in schools
-- Different from used scenarios
-- 2-3 sentences, includes hardware, network, data
-- Suitable for learners in Parktown, Gauteng
-- Example style: "GreenMap AI Lab with drones, new PCs, solar power, 15 000 photos, schools across SA accessing website"
+Choose ONE of these trending angles (rotate, never repeat used):
+- SA NEWS: load-shedding, water crisis, matric, SASSA, Springboks, potholes, e-waste, solar, township economy
+- GIRLS TRENDING: nail polish GelX designs, new apps TikTok/CapCut/Shein, latest fashion Y2K/thrift/matric dance dresses, makeup/skincare, braids booking, beauty filters, iPhone vs Android, Instagram/TikTok trends
 
-Output ONLY scenario title and 2-sentence description, no extra text.
+Requirements:
+- 100% relatable to Parktown Grade 10 girls in Gauteng
+- Example good: "GlowNail Studio App - 500 Parktown girls booking GelX nail art via TikTok, POS system, 15k nail designs stored, fibre network, database of bookings"
+- Example good: "Shein Haul Tracker - 800 girls sharing matric dance fashion hauls, cloud storage 20k photos, data overload, e-waste"
+- Must include: hardware (phones, PCs, touch screens), network (WiFi, fibre, UTP, IP), data (database, 15k photos, cloud)
+- 2-3 sentences, easy reading, Grade 10 terms kept
+- Suitable for Grade 10 exam standard
+
+Output ONLY scenario title and 2-sentence description.
 Format: TITLE: <title> | DESCRIPTION: <2 sentences>"""
 
     try:
@@ -329,48 +353,74 @@ def generate_paper_no_repeat(taught_chunks, ordered_concepts, gaps, past_texts, 
         used_scenarios.append(scenario)
 
     # STRICT: NEVER repeat same questions, ALWAYS new on what was not assessed
+    # NEW RULE: No general concepts - reuse least assessed with brand new questions
     past_questions_exact = []
     for txt in past_texts:
-        # Split into individual questions
         qs = re.split(r'\n\d+\.\s*|\nQ\d+|\nQUESTION', txt)
         past_questions_exact.extend([q.strip().lower()[:100] for q in qs if len(q.strip())>20])
     
-    # Helper to get next unused concept - STRICT no repeat
+    # Track how many times each concept has been reused in current paper with new phrasing
+    reuse_count = {}
+    
     def get_next_concept():
+        # Phase 1: Use all gaps first (never assessed) - each once
         for c in ordered_concepts:
             if c.lower() not in [uc.lower() for uc in used_concepts]:
-                # Check if concept was in gaps (taught but never assessed) - prioritize
                 if c in gaps:
                     used_concepts.add(c)
+                    reuse_count[c] = 1
                     return c
-        # If all gaps used, then use least-used from ordered
+        
+        # Phase 2: Use least assessed concepts (assessed 1-2 times before) - brand new questions
+        # These are from ordered_concepts that are not gaps but are least assessed
         for c in ordered_concepts:
             if c.lower() not in [uc.lower() for uc in used_concepts]:
+                # Least assessed - freq 1-2 times
                 used_concepts.add(c)
+                reuse_count[c] = 1
                 return c
-        # Absolute fallback - should not happen if taught content is large enough
-        # Create variation of gap concept with suffix to ensure uniqueness
-        if gaps:
-            base = random.choice(gaps)
-            variant = f"{base} - new angle"
-            if variant not in used_concepts:
-                used_concepts.add(variant)
-                return variant
-        return None
+        
+        # Phase 3: NO GENERAL CONCEPTS - Instead, reuse least assessed concepts again with NEW question phrasing
+        # Sort gaps + least assessed by reuse count ascending
+        least_reused_pool = sorted(list(reuse_count.keys()), key=lambda x: reuse_count.get(x, 0))
+        if not least_reused_pool:
+            least_reused_pool = gaps if gaps else ordered_concepts
+        
+        for base in least_reused_pool:
+            count = reuse_count.get(base, 0)
+            if count < 3:  # Allow up to 3 brand new questions per concept
+                # Create new angle but keep base concept for tracking
+                new_concept = f"{base}"  # Keep same base text, but we track reuse
+                # Increment reuse
+                reuse_count[base] = count + 1
+                # Return base concept - question generator will create brand new phrasing
+                # Use variant identifier for used_concepts to allow reuse
+                variant_key = f"{base}__reuse_{count+1}"
+                if variant_key.lower() not in [uc.lower() for uc in used_concepts]:
+                    used_concepts.add(variant_key)
+                    return base
+        
+        # Final fallback: cycle through least assessed again - still no general concepts
+        if ordered_concepts:
+            # Find least assessed by original freq
+            base = ordered_concepts[0]  # This is least assessed due to sorting
+            reuse_count[base] = reuse_count.get(base, 0) + 1
+            variant_key = f"{base}__reuse_{reuse_count[base]}"
+            used_concepts.add(variant_key)
+            return base
+        
+        # Should never reach here
+        return ordered_concepts[0] if ordered_concepts else "Backwards compatibility"
 
     def is_duplicate_question(new_q):
-        # STRICT: Check exact and near-exact duplicates against past papers
         new_q_lower = new_q.lower()
-        # 1. Exact substring check
         for past_q in past_questions_exact:
             if past_q in new_q_lower or new_q_lower in past_q:
                 return True
-            # 2. Cosine similarity check - stricter threshold 0.65 (was 0.82)
-            # Will be checked outside with vectorizer
         return False
 
     # Q1: Short Questions (20) - 5 MCQ (5) + 10 Matching (10) + 5 Short (5) = 20
-    q1_concepts = [get_next_concept() for _ in range(5)]
+    q1_concepts = [str(get_next_concept()) for _ in range(5)]
     mcq_templates = [
         ("{scenario} - https://greenmap.org.za/2026 is an example of:", ["IP Address","URL","Email address","Domain name"], "B"),
         ("Which does NOT belong logically in {scenario}?", ["Summary per day","Raw photos from drone","Average counted by AI","Total kg waste"], "B"),
@@ -401,19 +451,24 @@ def generate_paper_no_repeat(taught_chunks, ordered_concepts, gaps, past_texts, 
         ("Work + natural law", "Ergonomics"),
     ]
     for idx, (defn, term) in enumerate(matching_defs[:10]):
-        concept = get_next_concept()
+        concept = get_next_concept() or term
+        concept = str(concept)
         paper["Q1"].append({"num": f"1.{6+idx}", "q": defn, "a": term, "marks": 1, "concept": concept, "type": "Matching"})
 
     # Short 5x1
     for idx in range(5):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:200] if taught_chunks else concept
+        concept = get_next_concept() or f"Concept {idx+1}"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         paper["Q1"].append({"num": f"1.{16+idx}", "q": f"Define {concept} in context of {paper['scenarios']['Q1'][:40]}... (1)", "marks": 1, "concept": concept, "type": "Short"})
 
     # Q2: System Technologies (25) - Hardware, Software, System Software - 8-9 questions
     for i in range(9):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        concept = get_next_concept() or "General system concept"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         scenario = paper["scenarios"]["Q2"]
         prompt = f"""You are Grade 10 examiner for QUESTION 2: System Technologies (25 marks).
 Scenario (use): {scenario}
@@ -433,12 +488,14 @@ Create ONE Q2 question like "2.{i+1} Explain {concept}..." Output only question.
             q_text = f"2.{i+1} Explain {concept} using scenario: {scenario[:70]}... Why important for system? ({2 if i%2==0 else 3}) [Gap: taught but never assessed]"
 
         marks = 3 if i < 7 else 2  # 7*3=21 + 2*2=4 => 25
-        paper["Q2"].append({"q": q_text, "marks": marks, "concept": concept, "source": chunk[:100]})
+        paper["Q2"].append({"q": q_text, "marks": marks, "concept": concept, "source": str(chunk)[:100]})
 
     # Q3: Communication and Network Technologies (20) - 7 questions
     for i in range(7):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        concept = get_next_concept() or "General network concept"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         scenario = paper["scenarios"]["Q3"]
         prompt = f"""Grade 10 Q3: Communication and Network Technologies (20 marks). Scenario: {scenario}. Taught: {chunk}. Concept: {concept}. Topics: PAN/LAN/WLAN/WAN/MAN, Nodes, Network OS, UTP vs Fibre, IP/Domain/ISP/Broadband/WiFi vs Internet, Shaped vs throttled, Cellular. Formal Grade 10. Create ONE question 2-3 marks."""
 
@@ -456,8 +513,10 @@ Create ONE Q2 question like "2.{i+1} Explain {concept}..." Output only question.
 
     # Q4: Data and Information Management (16) - 6 questions
     for i in range(6):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        concept = get_next_concept() or "General data concept"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         scenario = paper["scenarios"]["Q4"]
         prompt = f"""Grade 10 Q4: Data and Information Management (16 marks).
 Learn: Full sentences, easy reading, keep Grade 10 terms: data, information, information overload, database, HTML, browser, search engine, W3C, plug-in, extension.
@@ -486,8 +545,10 @@ Create ONE question. Output ONLY question."""
 
     # Q5: Solution Development (19) - 7 questions - Problem solving, algorithms
     for i in range(7):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        concept = get_next_concept() or "General solution concept"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         scenario = paper["scenarios"]["Q5"]
         prompt = f"""Grade 10 Q5: Solution Development (19 marks). Scenario: {scenario}. Taught: {chunk}. Concept: {concept}. Topics: Problem solving, Input/Processing/Output, Algorithms, Flowcharts, Pseudocode, Trace tables, Validation. 2-3 marks. Formal Grade 10."""
 
@@ -505,8 +566,10 @@ Create ONE question. Output ONLY question."""
 
     # Q6: Integrated scenario (20) - Top of hill hard, integrates all, fresh SA scenario
     for i in range(7):
-        concept = get_next_concept()
-        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        concept = get_next_concept() or "General integrated concept"
+        concept = str(concept)
+        chunk_raw = random.choice(taught_chunks) if taught_chunks else concept
+        chunk = str(chunk_raw)
         scenario = paper["scenarios"]["Q6"]
         prompt = f"""Grade 10 Q6: Integrated scenario (20 marks) - TOP OF HILL but still easy reading.
 Learn: Full sentences, easy reading, keep Grade 10 terms: e-waste, green computing, ergonomics, CTS, AI ethics, information overload, recycle, donate.
@@ -631,7 +694,8 @@ if taught_files and past_files:
             style_info = learn_past_paper_style(past_texts)
             taught_keywords, buckets = extract_taught_concepts(taught_texts, st.session_state['taught_chunks'])
             past_concepts = style_info['concepts_assessed']
-            gaps, ordered_concepts = gap_and_no_repeat(taught_keywords, past_concepts, past_texts= past_texts)
+            gaps, ordered_concepts, freq_map = gap_and_no_repeat(taught_keywords, past_concepts, past_texts= past_texts)
+            st.session_state['freq_map'] = freq_map
 
             st.session_state['style_info'] = style_info
             st.session_state['taught_keywords'] = taught_keywords
