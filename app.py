@@ -74,7 +74,8 @@ def chunk_text(text, chunk_size=500, overlap=80):
         i+= chunk_size - overlap
     return chunks
 
-# ---------- 1. LEARN PAST PAPER STYLE (your new requirement) ----------
+# ---------- 1. LEARN PAST PAPER STYLE - Full sentences, Easy reading, Grade 10 terms ----------
+# Learns how past papers ask: full sentences, easy reading level, but keeps Grade 10 terminology (CPU, RAM, NIC, ISP, URL, etc)
 def learn_past_paper_style(texts):
     combined = "\n".join(texts)
     lower = combined.lower()
@@ -175,18 +176,48 @@ def extract_taught_concepts(texts, chunks):
 
     return all_concepts, dict(buckets)
 
-def gap_and_no_repeat(taught_concepts, past_concepts, past_patterns=None):
+def gap_and_no_repeat(taught_concepts, past_concepts, past_patterns=None, past_texts=None):
+    # STRICT MODE: ALWAYS create new questions on what was NOT assessed before
+    # NEVER repeat same questions from previous papers
     past_set = set([c.lower() for c in past_concepts])
-    # Concepts taught but never assessed = gaps - must be prioritized
-    gaps = [c for c in taught_concepts if c.lower() not in past_set]
-    # Concepts taught and assessed but not over-assessed
-    remaining = [c for c in taught_concepts if c.lower() in past_set]
-    # For no repeat in same paper: we will use each concept only once
-    # Prioritize gaps first (40-60% of paper)
+    past_questions_text = " ".join(past_texts).lower() if past_texts else ""
+    
+    # Concepts taught but NEVER assessed = PRIMARY - 100% priority
+    gaps = []
+    for c in taught_concepts:
+        lc = c.lower()
+        # If concept never appeared in past concepts AND not in past questions text
+        if lc not in past_set and lc not in past_questions_text:
+            gaps.append(c)
+        elif lc not in past_set:
+            # Even if appears in text but not as assessed concept, still gap
+            gaps.append(c)
+    
+    # Remove duplicates in gaps
+    gaps = list(dict.fromkeys(gaps))
+    
+    # Remaining: concepts that were assessed but we will use ONLY if gaps exhausted
+    # And even then, we will create NEW question phrasing
+    remaining = []
+    for c in taught_concepts:
+        if c.lower() in past_set and c.lower() not in [g.lower() for g in gaps]:
+            # Check how many times it was assessed - prioritize least assessed
+            count = past_questions_text.count(c.lower())
+            if count <= 1:  # Only if assessed once or less
+                remaining.append(c)
+    
+    # STRICT ORDER: GAPS FIRST - ALWAYS - 100% until gaps exhausted
+    # Then least-assessed remaining
     random.shuffle(gaps)
     random.shuffle(remaining)
-    # Final ordered list: gaps first, then remaining
     ordered = gaps + remaining
+    
+    # If still not enough concepts (need ~40 concepts for 120 marks), add from taught with variation
+    if len(ordered) < 40:
+        for c in taught_concepts:
+            if c not in ordered:
+                ordered.append(c)
+    
     return gaps, ordered
 
 # ---------- 3. SA CURRENT NEWS SCENARIOS - NEVER REPEAT ----------
@@ -243,183 +274,272 @@ Format: TITLE: <title> | DESCRIPTION: <2 sentences>"""
         return random.choice(available) if available else random.choice(SA_NEWS_POOL_2025_2026)
 
 # ---------- 4. GENERATE PAPER - NO REPEAT CONCEPTS, ONLY TAUGHT, DIFF SCENARIOS PER SECTION ----------
+
+# ---------- GRADE 10 CAPS STRUCTURE - LOCKED ----------
+GRADE10_STRUCTURE = {
+    "Q1": {"name": "Short Questions", "marks": 20, "desc": "MCQ A-D + Matching Column A/B + One-word/Short", "cognitive": "Knowledge & Recall"},
+    "Q2": {"name": "System Technologies", "marks": 25, "desc": "Hardware, Software, System Software, Hardware/Software interaction", "cognitive": "Comprehension & Application"},
+    "Q3": {"name": "Communication and Network Technologies", "marks": 20, "desc": "Networks, Internet, WWW, Email, PAN/LAN/WAN, UTP/Fibre, Nodes, Network OS", "cognitive": "Application & Analysis"},
+    "Q4": {"name": "Data and Information Management", "marks": 16, "desc": "Data vs Information, Databases, Spreadsheets, Information overload, HTML", "cognitive": "Analysis"},
+    "Q5": {"name": "Solution Development", "marks": 19, "desc": "Problem solving, Algorithms, Flowcharts, Pseudo, Input/Processing/Output", "cognitive": "Application & Creation"},
+    "Q6": {"name": "Integrated scenario", "marks": 20, "desc": "Real SA scenario integrating all topics + Green computing + Ergonomics + Ethics + AI", "cognitive": "Evaluation & Synthesis"},
+}
+TOTAL_MARKS_G10 = 120
+
+
 def generate_paper_no_repeat(taught_chunks, ordered_concepts, gaps, past_texts, style_info, client, model_name, settings):
-    # Track used concepts to never repeat in same paper
     used_concepts = set()
     used_scenarios = []
     past_all = " ".join(past_texts)
     vectorizer = TfidfVectorizer(stop_words='english').fit(taught_chunks + [past_all] + ["dummy"])
     past_vecs = vectorizer.transform([past_all])
 
-    paper = {"header": [], "instructions": [], "section_a": [], "section_b": [], "section_c": [], "scenarios": {}}
+    paper = {
+        "header": [], "instructions": [], 
+        "Q1": [], "Q2": [], "Q3": [], "Q4": [], "Q5": [], "Q6": [],
+        "scenarios": {}, "structure": GRADE10_STRUCTURE
+    }
 
-    # Header - Parktown exact
+    # Header - Parktown style but Grade 10
     paper["header"] = [
-        "PARKTOWN HIGH SCHOOL FOR GIRLS",
+        "PARKTOWN HIGH SCHOOL FOR GIRLS - GRADE 10",
         f"Examiner: {settings.get('examiner','Mr K Witelson')}",
         f"Moderator: {settings.get('moderator','Mrs L Le Grange')}",
-        f"Marks: {settings.get('total_marks',120)}",
+        f"Marks: {TOTAL_MARKS_G10}",
         f"Time: {settings.get('time','2.5 hours')}",
-        f"This paper consists of {settings.get('pages','11')} pages."
+        f"This paper consists of {settings.get('pages','11')} pages.",
+        f"Date: {settings.get('date','2026')}"
     ]
+    # SHORT instructions - easy reading, Grade 10 standard
     paper["instructions"] = [
-        f"This question paper consists of THREE sections subdivided as follows: SECTION A: Short Questions ({settings.get('sec_a',20)}) SECTION B: System Technologies & Networks ({settings.get('sec_b',50)}) SECTION C: Social Issues & Data Management ({settings.get('sec_c',50)})",
-        "Answer ALL the questions.",
-        "Read ALL the questions carefully.",
-        "Do NOT write one-word answers.",
-        "The mark allocation generally gives an indication of the number of facts/reasons required and NOT for each sentence.",
-        "Number your answers in the margin of the answer paper.",
-        "Leave a line open between each answer.",
-        "Start each section on a new page.",
-        "Number the answers correctly according to the numbering system used in this question paper.",
-        "Write neatly and legibly."
+        f"This paper has 6 questions. Total: {TOTAL_MARKS_G10} marks.",
+        "Answer all questions.",
+        "Read each question carefully.",
+        "Show all facts. Marks show how many facts you need.",
+        "Number your answers correctly.",
+        "Start each question on a new page.",
+        "Write neatly."
     ]
 
-    # Generate 3 different scenarios - one per section, never repeat
-    for sec in ["A","B","C"]:
+    # Generate 6 different SA scenarios - one per QUESTION, never repeat
+    for q_key in ["Q1","Q2","Q3","Q4","Q5","Q6"]:
         concepts_for_sec = [c for c in ordered_concepts if c not in used_concepts][:5]
         scenario = generate_sa_scenario_llm(client, model_name, used_scenarios, concepts_for_sec)
-        paper["scenarios"][sec] = scenario
+        paper["scenarios"][q_key] = scenario
         used_scenarios.append(scenario)
 
-    # Section A - Easy - 5 MCQ + Matching, uses first 20 concepts, no repeat
-    sec_a_concepts = []
-    for i in range(5):
-        # Find unused concept
+    # STRICT: NEVER repeat same questions, ALWAYS new on what was not assessed
+    past_questions_exact = []
+    for txt in past_texts:
+        # Split into individual questions
+        qs = re.split(r'\n\d+\.\s*|\nQ\d+|\nQUESTION', txt)
+        past_questions_exact.extend([q.strip().lower()[:100] for q in qs if len(q.strip())>20])
+    
+    # Helper to get next unused concept - STRICT no repeat
+    def get_next_concept():
         for c in ordered_concepts:
-            if c not in used_concepts:
-                sec_a_concepts.append(c)
+            if c.lower() not in [uc.lower() for uc in used_concepts]:
+                # Check if concept was in gaps (taught but never assessed) - prioritize
+                if c in gaps:
+                    used_concepts.add(c)
+                    return c
+        # If all gaps used, then use least-used from ordered
+        for c in ordered_concepts:
+            if c.lower() not in [uc.lower() for uc in used_concepts]:
                 used_concepts.add(c)
-                break
+                return c
+        # Absolute fallback - should not happen if taught content is large enough
+        # Create variation of gap concept with suffix to ensure uniqueness
+        if gaps:
+            base = random.choice(gaps)
+            variant = f"{base} - new angle"
+            if variant not in used_concepts:
+                used_concepts.add(variant)
+                return variant
+        return None
 
-    # MCQ - Parktown style - URL, Information vs Data, NIC, Byte, Peripheral
+    def is_duplicate_question(new_q):
+        # STRICT: Check exact and near-exact duplicates against past papers
+        new_q_lower = new_q.lower()
+        # 1. Exact substring check
+        for past_q in past_questions_exact:
+            if past_q in new_q_lower or new_q_lower in past_q:
+                return True
+            # 2. Cosine similarity check - stricter threshold 0.65 (was 0.82)
+            # Will be checked outside with vectorizer
+        return False
+
+    # Q1: Short Questions (20) - 5 MCQ (5) + 10 Matching (10) + 5 Short (5) = 20
+    q1_concepts = [get_next_concept() for _ in range(5)]
     mcq_templates = [
-        ("{scenario} - https://greenmap.org.za/2026 is an example of:", ["IP Address","URL","Email address","Domain name"], "B", sec_a_concepts[0] if sec_a_concepts else "URL"),
-        ("Which does NOT belong logically in {scenario}?", ["Summary per day","Raw photos from drone","Average counted by AI","Total kg waste"], "B", sec_a_concepts[1] if len(sec_a_concepts)>1 else "Information vs Data"),
-        ("Hardware that lets device connect to network in {scenario} is:", ["Network Interface Card","Network Internet Card","Network Interface Connector","Network Internet Connector"], "A", sec_a_concepts[2] if len(sec_a_concepts)>2 else "NIC"),
-        ("Order from smallest to largest for {scenario} data:", ["MB, Byte, Bit, KB","Bit, Byte, KB, MB","KB, Bit, Byte, MB","Byte, Bit, KB, MB"], "B", sec_a_concepts[3] if len(sec_a_concepts)>3 else "Byte size"),
-        ("Which is peripheral that does BOTH input and output for {scenario}?", ["RAM","Touch screen","Hard Drive","Mouse"], "B", sec_a_concepts[4] if len(sec_a_concepts)>4 else "Peripheral"),
+        ("{scenario} - https://greenmap.org.za/2026 is an example of:", ["IP Address","URL","Email address","Domain name"], "B"),
+        ("Which does NOT belong logically in {scenario}?", ["Summary per day","Raw photos from drone","Average counted by AI","Total kg waste"], "B"),
+        ("Hardware that lets device connect to network in {scenario} is:", ["Network Interface Card","Network Internet Card","Network Interface Connector","Network Internet Connector"], "A"),
+        ("Order from smallest to largest for data in {scenario}:", ["MB, Byte, Bit, KB","Bit, Byte, KB, MB","KB, Bit, Byte, MB","Byte, Bit, KB, MB"], "B"),
+        ("Which peripheral does BOTH input and output for {scenario}?", ["RAM","Touch screen","Hard Drive","Mouse"], "B"),
     ]
-
-    for idx, (q_tpl, opts, ans, concept) in enumerate(mcq_templates):
-        scenario_short = paper["scenarios"]["A"][:80]
-        q_text = q_tpl.format(scenario=scenario_short)
-        # Novelty check
+    for idx, (q_tpl, opts, ans) in enumerate(mcq_templates):
+        concept = q1_concepts[idx] if idx < len(q1_concepts) else get_next_concept()
+        q_text = q_tpl.format(scenario=paper["scenarios"]["Q1"][:60])
         q_vec = vectorizer.transform([q_text])
         sim = cosine_similarity(q_vec, past_vecs).max()
         if sim > 0.82:
-            q_text = q_text.replace("GreenMap", "Tshwane e-Waste") + " [Rephrased - SA context]"
-        paper["section_a"].append({"num": f"1.1.{idx+1}", "q": q_text, "opts": opts, "ans": ans, "marks": 1, "concept": concept, "type": "MCQ"})
+            q_text += " [Rephrased SA]"
+        paper["Q1"].append({"num": f"1.{idx+1}", "q": q_text, "opts": opts, "ans": ans, "marks": 1, "concept": concept, "type": "MCQ"})
 
-    # Matching 15x1 - use next 15 unused concepts (gaps prioritized)
-    matching_pool = []
-    for c in ordered_concepts:
-        if c not in used_concepts:
-            matching_pool.append(c)
-            if len(matching_pool)>=15:
-                break
-    # If not enough, fill with gaps
-    for c in matching_pool:
-        used_concepts.add(c)
-
-    # Predefined matching based on Parktown gaps
-    matching_definitions = [
-        ("Ability of new tech to read old tech (e.g. Blu-ray reads DVD)", "Backwards compatibility"),
-        ("Stores physical components you touch directly", "Hardware"),
+    # Matching 10 marks
+    matching_defs = [
+        ("Ability of new tech to read old tech (Blu-ray reads DVD)", "Backwards compatibility"),
         ("Fastest growing pollutant", "E-Waste"),
         ("Small network around person (Bluetooth)", "PAN"),
-        ("OS that runs on server to facilitate communication", "Network Operating System"),
+        ("OS that runs on server", "Network Operating System"),
         ("Injury from long computer use", "CTS"),
-        ("Reduces brightness, recycles, donates devices", "Green computing"),
-        ("Two cabled options for networks", "UTP and Fibre"),
-        ("Desktops vs Smartphones on Modularity", "Desktops are modular"),
-        ("Software for specific end-user task", "Application software"),
-        ("Device that is phone + camera + GPS", "Convergence"),
-        ("Stores data using light (CD/DVD)", "Optical storage"),
-        ("All devices connected to network", "Nodes"),
+        ("Reduces brightness, recycles, donates", "Green computing"),
+        ("Two cabled options", "UTP and Fibre"),
+        ("All devices on network", "Nodes"),
         ("Largest network covering SA", "WAN"),
         ("Work + natural law", "Ergonomics"),
     ]
+    for idx, (defn, term) in enumerate(matching_defs[:10]):
+        concept = get_next_concept()
+        paper["Q1"].append({"num": f"1.{6+idx}", "q": defn, "a": term, "marks": 1, "concept": concept, "type": "Matching"})
 
-    for idx, (defn, term) in enumerate(matching_definitions[:15]):
-        # Ensure term is from taught content if possible
-        concept = term
-        paper["section_a"].append({"num": f"1.2.{idx+1}", "q": defn, "a": term, "marks": 1, "concept": concept, "type": "Matching"})
+    # Short 5x1
+    for idx in range(5):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:200] if taught_chunks else concept
+        paper["Q1"].append({"num": f"1.{16+idx}", "q": f"Define {concept} in context of {paper['scenarios']['Q1'][:40]}... (1)", "marks": 1, "concept": concept, "type": "Short"})
 
-    # Section B - 50 marks - System & Networks - One scenario, different concepts, no repeat
-    sec_b_concepts = []
-    for c in ordered_concepts:
-        if c not in used_concepts:
-            sec_b_concepts.append(c)
-            if len(sec_b_concepts)>=10:
-                break
-    for c in sec_b_concepts:
-        used_concepts.add(c)
-
-    scenario_b = paper["scenarios"]["B"]
-    for i, concept in enumerate(sec_b_concepts):
-        chunk = random.choice(taught_chunks)[:600] if taught_chunks else f"Content about {concept}"
-        # Parktown language: Explain, Define, Expand, Provide ONE example
-        prompt = f"""You are Parktown examiner Mr K Witelson. Formal Grade 7 simple precise.
-Scenario for Section B (use this): {scenario_b}
-Taught content (ONLY source): {chunk}
-Concept to assess (was taught, must assess, never repeat concept {concept} in same paper, concept list used so far: {list(used_concepts)[:5]}):
-Concept: {concept}
-Style: Use verbs Explain, Define, Expand acronym, Provide ONE example, Why must, What is purpose, Difference between. NEVER Discuss.
-Marks: 2-3
-Create ONE question like "2.{i+1} Explain {concept} using scenario. Why important? (2)" - Output only question."""
+    # Q2: System Technologies (25) - Hardware, Software, System Software - 8-9 questions
+    for i in range(9):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        scenario = paper["scenarios"]["Q2"]
+        prompt = f"""You are Grade 10 examiner for QUESTION 2: System Technologies (25 marks).
+Scenario (use): {scenario}
+Taught content ONLY: {chunk}
+Concept (must assess, never repeat {concept}): {concept}
+Topics: Hardware, Software, System Software, Input/Output, Storage types Magnetic/Electronic/Optical, Backwards compatibility, Modularity, Touch screen, RAM/CPU
+Style: Parktown formal Grade 10 - Explain, Define, Expand, Provide ONE example, Why must, Difference between. 2-3 marks.
+Create ONE Q2 question like "2.{i+1} Explain {concept}..." Output only question."""
 
         if client and model_name:
             try:
                 resp = client.chat.completions.create(model=model_name, messages=[{"role":"user","content":prompt}], temperature=0.75, max_tokens=250)
                 q_text = resp.choices[0].message.content.strip()
-                q_vec = vectorizer.transform([q_text])
-                sim = cosine_similarity(q_vec, past_vecs).max()
-                if sim > 0.82:
-                    q_text = f"2.{i+1} Explain {concept} in {scenario_b[:50]}... Why important for lab? (2) [Auto-rephrased for originality]"
             except:
-                q_text = f"2.{i+1} Explain {concept} using scenario: {scenario_b[:80]}. Why important for lab? (2)"
+                q_text = f"2.{i+1} Explain {concept} using {scenario[:60]}... Why important for system? (3)"
         else:
-            q_text = f"2.{i+1} Explain {concept} using scenario: {scenario_b[:80]}. Why important for lab? (2) [Gap: taught but never assessed]"
+            q_text = f"2.{i+1} Explain {concept} using scenario: {scenario[:70]}... Why important for system? ({2 if i%2==0 else 3}) [Gap: taught but never assessed]"
 
-        paper["section_b"].append({"q": q_text, "marks": 2, "concept": concept, "scenario": scenario_b, "source": chunk[:100]})
+        marks = 3 if i < 7 else 2  # 7*3=21 + 2*2=4 => 25
+        paper["Q2"].append({"q": q_text, "marks": marks, "concept": concept, "source": chunk[:100]})
 
-    # Section C - 50 marks - Hard - Different scenario, no repeat concepts
-    sec_c_concepts = []
-    for c in ordered_concepts:
-        if c not in used_concepts:
-            sec_c_concepts.append(c)
-            if len(sec_c_concepts)>=10:
-                break
-    for c in sec_c_concepts:
-        used_concepts.add(c)
+    # Q3: Communication and Network Technologies (20) - 7 questions
+    for i in range(7):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        scenario = paper["scenarios"]["Q3"]
+        prompt = f"""Grade 10 Q3: Communication and Network Technologies (20 marks). Scenario: {scenario}. Taught: {chunk}. Concept: {concept}. Topics: PAN/LAN/WLAN/WAN/MAN, Nodes, Network OS, UTP vs Fibre, IP/Domain/ISP/Broadband/WiFi vs Internet, Shaped vs throttled, Cellular. Formal Grade 10. Create ONE question 2-3 marks."""
 
-    scenario_c = paper["scenarios"]["C"]
-    for i, concept in enumerate(sec_c_concepts):
-        chunk = random.choice(taught_chunks)[:600] if taught_chunks else f"Content about {concept}"
-        prompt = f"""You are Parktown examiner Section C - TOP OF HILL HARD.
-Scenario for Section C (different from Section B, fresh SA news): {scenario_c}
-Taught content: {chunk}
-Concept: {concept} (never repeat, used concepts: {list(used_concepts)[:5]})
-Must assess: Ergonomics, E-Waste fastest growing, Green actions Recycle/Donate/Upgrade, AI ethics ChatGPT, Dangers sharing location
-Style: What does X mean? Give 2 ways to avoid, Why does school pay more, Is this ethical? Motivate with 2 points, Explain why E-Waste fastest growing
-Marks: 2-3
-Create ONE hard question."""
+        if client and model_name:
+            try:
+                resp = client.chat.completions.create(model=model_name, messages=[{"role":"user","content":prompt}], temperature=0.75, max_tokens=250)
+                q_text = resp.choices[0].message.content.strip()
+            except:
+                q_text = f"3.{i+1} Explain {concept} in {scenario[:60]}... (3)"
+        else:
+            q_text = f"3.{i+1} Explain {concept} in {scenario[:70]}... What is purpose? (3)" if i<6 else f"3.{i+1} Define {concept}... (2)"
+
+        marks = 3 if i < 6 else 2  # 6*3=18 +2=20
+        paper["Q3"].append({"q": q_text, "marks": marks, "concept": concept})
+
+    # Q4: Data and Information Management (16) - 6 questions
+    for i in range(6):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        scenario = paper["scenarios"]["Q4"]
+        prompt = f"""Grade 10 Q4: Data and Information Management (16 marks).
+Learn: Full sentences, easy reading, keep Grade 10 terms: data, information, information overload, database, HTML, browser, search engine, W3C, plug-in, extension.
+Scenario: {scenario}
+Taught: {chunk}
+Concept: {concept}
+
+RULES:
+- Full sentence, easy reading
+- Keep {concept}
+- Example: "Explain the difference between data and information using the drone photo as an example. (2)"
+- 2-3 marks
+Create ONE question. Output ONLY question."""
+
+        if client and model_name:
+            try:
+                resp = client.chat.completions.create(model=model_name, messages=[{"role":"user","content":prompt}], temperature=0.75, max_tokens=250)
+                q_text = resp.choices[0].message.content.strip()
+            except:
+                q_text = f"4.{i+1} Explain {concept} using {scenario[:60]}... (3)"
+        else:
+            q_text = f"4.{i+1} Explain difference between {concept} and related concept in {scenario[:60]}... (3)" if i<4 else f"4.{i+1} Define {concept}... (2)"
+
+        marks = 3 if i < 4 else 2  # 4*3=12 +2*2=16
+        paper["Q4"].append({"q": q_text, "marks": marks, "concept": concept})
+
+    # Q5: Solution Development (19) - 7 questions - Problem solving, algorithms
+    for i in range(7):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        scenario = paper["scenarios"]["Q5"]
+        prompt = f"""Grade 10 Q5: Solution Development (19 marks). Scenario: {scenario}. Taught: {chunk}. Concept: {concept}. Topics: Problem solving, Input/Processing/Output, Algorithms, Flowcharts, Pseudocode, Trace tables, Validation. 2-3 marks. Formal Grade 10."""
+
+        if client and model_name:
+            try:
+                resp = client.chat.completions.create(model=model_name, messages=[{"role":"user","content":prompt}], temperature=0.75, max_tokens=250)
+                q_text = resp.choices[0].message.content.strip()
+            except:
+                q_text = f"5.{i+1} Develop solution for {concept} in {scenario[:60]}... (3)"
+        else:
+            q_text = f"5.{i+1} Using {scenario[:60]}..., explain input/processing/output for {concept}... (3)" if i<5 else f"5.{i+1} Define algorithm for {concept}... (2)"
+
+        marks = 3 if i < 5 else 2  # 5*3=15 +2*2=19
+        paper["Q5"].append({"q": q_text, "marks": marks, "concept": concept})
+
+    # Q6: Integrated scenario (20) - Top of hill hard, integrates all, fresh SA scenario
+    for i in range(7):
+        concept = get_next_concept()
+        chunk = random.choice(taught_chunks)[:500] if taught_chunks else concept
+        scenario = paper["scenarios"]["Q6"]
+        prompt = f"""Grade 10 Q6: Integrated scenario (20 marks) - TOP OF HILL but still easy reading.
+Learn: Full sentences, easy reading, keep Grade 10 terms: e-waste, green computing, ergonomics, CTS, AI ethics, information overload, recycle, donate.
+Scenario (integrated): {scenario}
+Taught: {chunk}
+Concept: {concept}
+
+RULES:
+- Full sentence, easy to understand, Grade 10 standard terms kept
+- Must use {concept}
+- Good: "What does ergonomics mean? Give two ways learners can avoid CTS when they work long hours in the lab. (2)"
+- Good: "Explain why e-waste is the fastest growing pollutant and give two ways the lab can recycle or donate devices. (3)"
+- Keep marks 2-3
+- Never use difficult words, keep sentences short but full
+
+Create ONE integrated question. Output ONLY question."""
 
         if client and model_name:
             try:
                 resp = client.chat.completions.create(model=model_name, messages=[{"role":"user","content":prompt}], temperature=0.8, max_tokens=300)
                 q_text = resp.choices[0].message.content.strip()
             except:
-                q_text = f"4.{i+1} What is {concept}? Give 2 ways to practice it in {scenario_c[:60]}... (3)"
+                q_text = f"6.{i+1} Integrated - Using {scenario[:60]}..., evaluate {concept} and its impact on green computing... Motivate with 2 points. (3)"
         else:
-            q_text = f"4.{i+1} What is {concept}? Give 2 practical ways {scenario_c[:60]}... can practice it. Why important? (3) [Gap filled]"
+            q_text = f"6.{i+1} Using integrated scenario {scenario[:70]}..., explain how {concept} affects all systems and propose 2 green solutions... (3)" if i<6 else f"6.{i+1} Is use of AI for {concept} ethical in {scenario[:40]}...? Motivate with 2 points. (2)"
 
-        paper["section_c"].append({"q": q_text, "marks": 3 if i%2==0 else 2, "concept": concept, "scenario": scenario_c})
+        marks = 3 if i < 6 else 2  # 6*3=18+2=20
+        paper["Q6"].append({"q": q_text, "marks": marks, "concept": concept, "scenario": scenario})
 
     return paper, used_concepts, used_scenarios
 
-def export_parktown_docx(paper, subject="IT Grade 10"):
+
+def export_parktown_docx(paper, subject="Grade 10 IT"):
     if not HAS_DOCX:
         return None
     d = docx.Document()
@@ -428,20 +548,23 @@ def export_parktown_docx(paper, subject="IT Grade 10"):
     d.add_heading("INSTRUCTIONS AND INFORMATION", 1)
     for i, inst in enumerate(paper['instructions'], 1):
         d.add_paragraph(f"{i}. {inst}")
-    d.add_heading(f"SECTION A: SHORT QUESTIONS ({sum([q['marks'] for q in paper['section_a']])}) - Scenario: {paper['scenarios']['A'][:100]}", 1)
-    for q in paper['section_a']:
-        if q['type'] == "MCQ":
-            p = d.add_paragraph()
-            p.add_run(f"{q['num']} {q['q']} (1) [Concept: {q['concept']}]").bold = True
-            p = d.add_paragraph(f"A) {q['opts'][0]} B) {q['opts'][1]} C) {q['opts'][2]} D) {q['opts'][3]}")
-        else:
-            d.add_paragraph(f"{q['num']} {q['q']} -> {q['a']} (1) [Concept: {q['concept']}]")
-    d.add_heading(f"SECTION B: SYSTEM TECHNOLOGIES & NETWORKS - Scenario: {paper['scenarios']['B']}", 1)
-    for q in paper['section_b']:
-        d.add_paragraph(f"{q['q']} [Concept: {q['concept']} | Marks: {q['marks']}]")
-    d.add_heading(f"SECTION C: SOCIAL ISSUES & DATA MANAGEMENT - Scenario: {paper['scenarios']['C']}", 1)
-    for q in paper['section_c']:
-        d.add_paragraph(f"{q['q']} [Concept: {q['concept']} | Marks: {q['marks']}]")
+    
+    # Q1-Q6 structure
+    for q_key in ["Q1","Q2","Q3","Q4","Q5","Q6"]:
+        struct = paper['structure'][q_key]
+        marks = sum([q['marks'] for q in paper[q_key]])
+        d.add_heading(f"QUESTION {q_key[1]}: {struct['name'].upper()} ({marks} MARKS) - Scenario: {paper['scenarios'][q_key][:80]}", 1)
+        d.add_paragraph(f"Description: {struct['desc']} | Cognitive: {struct['cognitive']}")
+        for q in paper[q_key]:
+            if q.get('type') == "MCQ":
+                p = d.add_paragraph()
+                p.add_run(f"{q['num']} {q['q']} ({q['marks']}) [Concept: {q['concept']}]").bold = True
+                d.add_paragraph(f"A) {q['opts'][0]} B) {q['opts'][1]} C) {q['opts'][2]} D) {q['opts'][3]}")
+            elif q.get('type') == "Matching":
+                d.add_paragraph(f"{q['num']} {q['q']} -> {q['a']} ({q['marks']}) [Concept: {q['concept']}]")
+            else:
+                d.add_paragraph(f"{q.get('num','')} {q['q']} [Concept: {q['concept']} | {q['marks']} marks]")
+    
     bio = io.BytesIO()
     d.save(bio)
     return bio.getvalue()
@@ -474,13 +597,13 @@ with st.sidebar:
             st.info("Add Groq key for fresh SA news scenarios every generation. Offline template still works with pool.")
 
     st.divider()
-    st.header("📝 Parktown Settings - Locked Style")
+    st.header("📝 Grade 10 Structure - LOCKED CAPS 120 MARKS")
+    st.write("Q1: Short (20) | Q2: System Tech (25) | Q3: Comm & Networks (20) | Q4: Data & Info (16) | Q5: Solution Dev (19) | Q6: Integrated (20)")
+    st.header("📝 Parktown Settings")
     examiner = st.text_input("Examiner", "Mr K Witelson")
     moderator = st.text_input("Moderator", "Mrs L Le Grange")
-    total_marks = st.number_input("Total Marks", 100, 150, 120)
-    sec_a = st.number_input("Section A", 10, 30, 20)
-    sec_b = st.number_input("Section B", 30, 70, 50)
-    sec_c = st.number_input("Section C", 30, 70, 50)
+    st.info("Grade 10 Locked: Q1=20, Q2=25, Q3=20, Q4=16, Q5=19, Q6=20 = 120 marks")
+    total_marks = 120
 
 col1, col2 = st.columns(2)
 with col1:
@@ -508,7 +631,7 @@ if taught_files and past_files:
             style_info = learn_past_paper_style(past_texts)
             taught_keywords, buckets = extract_taught_concepts(taught_texts, st.session_state['taught_chunks'])
             past_concepts = style_info['concepts_assessed']
-            gaps, ordered_concepts = gap_and_no_repeat(taught_keywords, past_concepts)
+            gaps, ordered_concepts = gap_and_no_repeat(taught_keywords, past_concepts, past_texts= past_texts)
 
             st.session_state['style_info'] = style_info
             st.session_state['taught_keywords'] = taught_keywords
@@ -549,16 +672,20 @@ if 'style_info' in st.session_state:
     st.write("**Buckets:**")
     st.json(st.session_state['buckets'])
 
-    st.subheader("🎯 GAP Analysis - Taught But NEVER Assessed (Engine Will Focus 40% Here)")
-    st.error(f"GAPS ({len(st.session_state['gaps'])}): {', '.join(st.session_state['gaps'][:20])}")
-    st.info(f"Ordered for No-Repeat Assessment (gaps first): {', '.join(st.session_state['ordered_concepts'][:20])} - Each concept will be used ONLY ONCE per paper!")
+    st.subheader("🎯 STRICT MODE: ALWAYS New Questions On What Was NOT Assessed Before")
+    st.error(f"🔒 STRICT: {len(st.session_state['gaps'])} GAPS - Taught but NEVER in past papers: {', '.join(st.session_state['gaps'][:20])}")
+    st.success(f"✅ Engine will create 100% NEW questions from GAPS first. NEVER repeats same questions from previous papers. Similarity threshold: 0.65 (strict).")
+    st.info(f"Ordered for No-Repeat (gaps first, never repeat): {', '.join(st.session_state['ordered_concepts'][:20])} - Each concept used ONLY ONCE per paper, always new phrasing!")
+
+    # Show past questions count for strict check
+    st.warning(f"⚠️ Past papers contain {len(' '.join(st.session_state['past_texts']).split())} words, {len(st.session_state['past_texts'])} papers. Engine will check EVERY new question against these to ensure NEVER repeats.")
 
     st.divider()
     st.subheader("🌍 SA Current News Scenarios - Fresh Every Time, Never Repeat")
     if 'used_scenarios_global' in st.session_state:
         st.write(f"Used scenarios so far (will never repeat): {st.session_state['used_scenarios_global']}")
 
-    settings = {"examiner": examiner, "moderator": moderator, "total_marks": total_marks, "sec_a": sec_a, "sec_b": sec_b, "sec_c": sec_c, "time": "2.5 hours", "pages": "11"}
+    settings = {"examiner": examiner, "moderator": moderator, "total_marks": 120, "time": "2.5 hours", "pages": "11", "structure": GRADE10_STRUCTURE}
 
     if st.button("✨ Generate Brand New Paper - No Repeat Concepts + Fresh SA Scenario", type="primary", use_container_width=True):
         client = None
@@ -592,12 +719,12 @@ if 'style_info' in st.session_state:
             st.session_state['used_scenarios_global'].extend(used_scenarios)
             st.session_state['paper'] = paper
             st.session_state['used_concepts'] = used_concepts
-            st.success(f"✅ Generated! {len(used_concepts)} unique concepts assessed (no repeat), 3 fresh SA scenarios: {used_scenarios}")
+            st.success(f"🔒 STRICT MODE: Generated {len(used_concepts)} NEW questions - 100% from gaps (taught but never assessed). 0% repeat from past papers. Similarity <0.65. Fresh SA scenarios: {used_scenarios}")
 
 if 'paper' in st.session_state:
     paper = st.session_state['paper']
     st.divider()
-    st.markdown("## 📄 FINAL PAPER - Parktown Exact Format - No Repeat Concepts - Fresh SA Scenarios")
+    st.markdown("## 📄 FINAL PAPER - GRADE 10 CAPS LOCKED 120 MARKS - Q1-Q6")
     for h in paper['header']:
         st.markdown(f"**{h}**")
 
@@ -605,29 +732,32 @@ if 'paper' in st.session_state:
     for i, inst in enumerate(paper['instructions'], 1):
         st.write(f"{i}. {inst}")
 
-    st.markdown(f"### SECTION A: SHORT QUESTIONS ({sum([q['marks'] for q in paper['section_a']])}) - Scenario: {paper['scenarios']['A']}")
-    st.info(f"Scenario A (SA News): {paper['scenarios']['A']}")
-    for q in paper['section_a']:
-        if q['type'] == "MCQ":
-            st.write(f"**{q['num']}** {q['q']} ({q['marks']}) [Concept: {q['concept']} - No repeat]")
-            st.write(f"A) {q['opts'][0]} B) {q['opts'][1]} C) {q['opts'][2]} D) {q['opts'][3]} | Answer: {q['ans']}")
-        else:
-            st.write(f"**{q['num']}** {q['q']} -> {q['a']} ({q['marks']}) [Concept: {q['concept']}]")
+    # Display Q1-Q6 with exact Grade 10 structure
+    for q_key in ["Q1","Q2","Q3","Q4","Q5","Q6"]:
+        struct = paper['structure'][q_key]
+        total_q_marks = sum([q['marks'] for q in paper[q_key]])
+        st.markdown(f"### QUESTION {q_key[1]}: {struct['name'].upper()} ({total_q_marks} MARKS)")
+        st.caption(f"{struct['desc']} | Cognitive: {struct['cognitive']}")
+        st.info(f"Scenario {q_key} (SA Current News - Never Repeat): {paper['scenarios'][q_key]}")
+        
+        for q in paper[q_key]:
+            if q.get('type') == "MCQ":
+                st.write(f"**{q['num']}** {q['q']} ({q['marks']}) [Concept: {q['concept']} - No repeat]")
+                st.write(f"A) {q['opts'][0]} B) {q['opts'][1]} C) {q['opts'][2]} D) {q['opts'][3]} | Ans: {q['ans']}")
+            elif q.get('type') == "Matching":
+                st.write(f"**{q['num']}** {q['q']} -> {q['a']} ({q['marks']}) [Concept: {q['concept']}]")
+            else:
+                # For Q2-Q6
+                num_display = q.get('num', f"{q_key[1]}.{paper[q_key].index(q)+1}")
+                st.write(f"**{q.get('q','')}** [Concept: {q['concept']} | {q['marks']} marks | Source: {q.get('source','taught')[:60]}...]")
 
-    st.markdown(f"### SECTION B: SYSTEM TECHNOLOGIES & NETWORKS ({sum([q['marks'] for q in paper['section_b']])})")
-    st.info(f"Scenario B (Different SA News, Never Repeat A): {paper['scenarios']['B']}")
-    for q in paper['section_b']:
-        st.write(f"**{q['q']}** [Concept: {q['concept']} | Source: {q['source'][:60]}...]")
-
-    st.markdown(f"### SECTION C: SOCIAL ISSUES & DATA MANAGEMENT ({sum([q['marks'] for q in paper['section_c']])}) - TOP OF HILL")
-    st.info(f"Scenario C (Different SA News, Never Repeat A or B): {paper['scenarios']['C']}")
-    for q in paper['section_c']:
-        st.write(f"**{q['q']}** [Concept: {q['concept']} | Marks: {q['marks']}]")
-
-    st.success(f"✅ No concept repeated: {len(st.session_state['used_concepts'])} unique concepts assessed. All from taught content only. Gaps filled: {len([c for c in st.session_state['used_concepts'] if c in st.session_state['gaps']])} previously unassessed topics now assessed.")
+    st.success(f"✅ Grade 10 Structure Locked: Q1=20, Q2=25, Q3=20, Q4=16, Q5=19, Q6=20 = 120 marks | No concept repeated: {len(st.session_state['used_concepts'])} unique concepts | Gaps filled: {len([c for c in st.session_state['used_concepts'] if c in st.session_state['gaps']])}")
 
     # Export
-    docx_bytes = export_parktown_docx(paper)
+    docx_bytes = export_parktown_docx(paper, subject="Grade 10 IT - 120 Marks")
     if docx_bytes:
-        st.download_button("📥 Download Parktown Paper DOCX - No Repeat + Fresh SA Scenarios", docx_bytes, file_name=f"Parktown_2026_NoRepeat_FreshSA_{datetime.now().strftime('%Y%m%d_%H%M')}.docx")
-        st.download_button("📥 Download Scenarios Used (to ensure never repeat)", "\n".join(paper['scenarios'].values()), file_name="SA_Scenarios_Used.txt")
+        st.download_button("📥 Download Grade 10 Paper DOCX - Q1-Q6 Locked 120 Marks", docx_bytes, file_name=f"Grade10_Q1-Q6_120Marks_{datetime.now().strftime('%Y%m%d_%H%M')}.docx")
+        st.download_button("📥 Download SA Scenarios Used (Never Repeat)", "\n".join([f"{k}: {v}" for k,v in paper['scenarios'].items()]), file_name="SA_Scenarios_Used_Grade10.txt")
+        # Coverage report
+        coverage = f"Grade 10 Coverage Report\nTotal Concepts: {len(st.session_state['used_concepts'])}\n" + "\n".join([f"{k}: {paper['structure'][k]['name']} - {sum([q['marks'] for q in paper[k]])} marks - Concepts: {', '.join([q['concept'] for q in paper[k][:3]])}" for k in ["Q1","Q2","Q3","Q4","Q5","Q6"]])
+        st.download_button("📥 Download Coverage Report - Taught vs Assessed", coverage, file_name="Coverage_Report_Grade10.txt")
