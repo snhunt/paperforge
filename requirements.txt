@@ -1,7 +1,13 @@
-streamlit
-PyMuPDF
-python-docx
-scikit-learn
-numpy
-openai
-chromadb
+# PaperForge Parktown Updated - No Repeat + SA News Scenarios
+streamlit>=1.35.0
+python-dotenv>=1.0.0
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+python-pptx>=0.6.21
+openpyxl>=3.1.0
+scikit-learn>=1.3.0
+numpy>=1.26.0
+openai>=1.30.0
+groq>=0.5.0
+pandas>=2.2.0
+reportlab>=4.1.0
